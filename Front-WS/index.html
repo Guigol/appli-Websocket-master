@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compteur temps réel - Polling vs SSE</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        .counter-display {
+            text-align: center;
+            padding: 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 8px;
+            color: white;
+        }
+        .counter-value {
+            font-size: 72px;
+            font-weight: bold;
+            margin: 16px 0;
+        }
+        .counter-label {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        .btn-polling {
+            background: #3b82f6;
+            color: white;
+        }
+        .btn-sse {
+            background: #10b981;
+            color: white;
+        }
+        .btn-stop {
+            background: #ef4444;
+            color: white;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .status {
+            text-align: center;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 12px;
+            font-weight: 500;
+        }
+        .status.inactive {
+            background: #e5e7eb;
+            color: #6b7280;
+        }
+        .status.polling {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .status.sse {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+        }
+        .metric {
+            text-align: center;
+            padding: 20px;
+            background: #f9fafb;
+            border-radius: 6px;
+            border: 2px solid #e5e7eb;
+        }
+        .metric-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #1f2937;
+            margin: 8px 0;
+        }
+        .metric-label {
+            font-size: 14px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .metric-unit {
+            font-size: 14px;
+            color: #9ca3af;
+        }
+        .logs {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #1f2937;
+            color: #10b981;
+            padding: 16px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+        }
+        .log-time {
+            color: #6b7280;
+        }
+        h2 {
+            color: #1f2937;
+            margin-bottom: 16px;
+            font-size: 20px;
+        }
+        .config {
+            background: #fef3c7;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 14px;
+            color: #92400e;
+        }
+        .config strong {
+            color: #78350f;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Compteur de visiteurs en temps réel</h1>
+        
+        <div class="card">
+            <div class="config">
+                ⚙️ <strong>Configuration serveur attendue :</strong> http://localhost:8081 | Polling: GET /api/count | SSE: GET /api/stream
+            </div>
+            
+            <div class="counter-display">
+                <div class="counter-label">Visiteurs en ligne</div>
+                <div class="counter-value" id="counter">--</div>
+                <div class="counter-label" id="lastUpdate">En attente...</div>
+            </div>
+            
+            <div class="controls">
+                <button class="btn-polling" id="btnPolling">🔄 Démarrer Polling</button>
+                <button class="btn-sse" id="btnSSE">⚡ Démarrer SSE</button>
+                <button class="btn-stop" id="btnStop" disabled>⏹️ Stop</button>
+            </div>
+            
+            <div class="status inactive" id="status">
+                ⚪ Inactif
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>📈 Métriques réseau</h2>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-label">Requêtes HTTP</div>
+                    <div class="metric-value" id="metricRequests">0</div>
+                    <div class="metric-unit">total</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Headers envoyés</div>
+                    <div class="metric-value" id="metricHeaders">0</div>
+                    <div class="metric-unit">Ko</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Temps écoulé</div>
+                    <div class="metric-value" id="metricTime">0</div>
+                    <div class="metric-unit">secondes</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Req/seconde</div>
+                    <div class="metric-value" id="metricRate">0</div>
+                    <div class="metric-unit">req/s</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>📝 Journal des requêtes</h2>
+            <div class="logs" id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8081';
+        const POLLING_INTERVAL = 2000; // 2 secondes
+        
+        // État de l'application
+        let state = {
+            mode: null, // 'polling' | 'sse' | null
+            intervalId: null,
+            eventSource: null,
+            startTime: null,
+            requestCount: 0,
+            totalHeadersSize: 0,
+        };
+        
+        // Éléments DOM
+        const elements = {
+            counter: document.getElementById('counter'),
+            lastUpdate: document.getElementById('lastUpdate'),
+            status: document.getElementById('status'),
+            btnPolling: document.getElementById('btnPolling'),
+            btnSSE: document.getElementById('btnSSE'),
+            btnStop: document.getElementById('btnStop'),
+            metricRequests: document.getElementById('metricRequests'),
+            metricHeaders: document.getElementById('metricHeaders'),
+            metricTime: document.getElementById('metricTime'),
+            metricRate: document.getElementById('metricRate'),
+            logs: document.getElementById('logs'),
+        };
+        
+        // Logging
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString('fr-FR');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.innerHTML = `<span class="log-time">[${timestamp}]</span> ${message}`;
+            elements.logs.appendChild(logEntry);
+            elements.logs.scrollTop = elements.logs.scrollHeight;
+        }
+        
+        // Mise à jour du compteur
+        function updateCounter(data) {
+            elements.counter.textContent = data.count;
+            const time = new Date(data.timestamp).toLocaleTimeString('fr-FR');
+            elements.lastUpdate.textContent = `Dernière mise à jour : ${time}`;
+            log(`✅ Compteur mis à jour : ${data.count} visiteurs`);
+        }
+        
+        // Mise à jour des métriques
+        function updateMetrics() {
+            if (!state.startTime) return;
+            
+            const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+            const rate = elapsed > 0 ? (state.requestCount / elapsed).toFixed(2) : 0;
+            
+            elements.metricRequests.textContent = state.requestCount;
+            elements.metricHeaders.textContent = (state.totalHeadersSize / 1024).toFixed(2);
+            elements.metricTime.textContent = elapsed;
+            elements.metricRate.textContent = rate;
+        }
+        
+        // Compte les requêtes via PerformanceObserver
+        function trackRequest(url) {
+            state.requestCount++;
+            
+            // Estimation taille headers HTTP (approximation)
+            // En réalité, PerformanceResourceTiming ne donne pas la taille exacte des headers
+            // On estime : ~400-800 octets par requête (headers request + response)
+            state.totalHeadersSize += 600;
+            
+            updateMetrics();
+        }
+        
+        // Mode Polling
+        async function startPolling() {
+            log('🔄 Démarrage du mode Polling (requête toutes les 2s)');
+            state.mode = 'polling';
+            state.startTime = Date.now();
+            updateStatus();
+            
+            const poll = async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/count`);
+                    trackRequest(`${API_BASE}/api/count`);
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    updateCounter(data);
+                } catch (error) {
+                    log(`❌ Erreur polling : ${error.message}`, 'error');
+                }
+            };
+            
+            // Premier appel immédiat
+            await poll();
+            
+            // Puis intervalle
+            state.intervalId = setInterval(poll, POLLING_INTERVAL);
+        }
+        
+        // Mode SSE
+        function startSSE() {
+            log('⚡ Démarrage du mode SSE (Server-Sent Events)');
+            state.mode = 'sse';
+            state.startTime = Date.now();
+            updateStatus();
+            
+            state.eventSource = new EventSource(`${API_BASE}/api/stream`);
+            
+            // Première connexion compte comme une requête HTTP
+            trackRequest(`${API_BASE}/api/stream`);
+            
+            state.eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateCounter(data);
+                } catch (error) {
+                    log(`❌ Erreur parsing SSE : ${error.message}`, 'error');
+                }
+            };
+            
+            state.eventSource.onerror = (error) => {
+                log(`❌ Erreur connexion SSE`, 'error');
+                // EventSource reconnecte automatiquement
+            };
+            
+            state.eventSource.onopen = () => {
+                log('✅ Connexion SSE établie');
+            };
+        }
+        
+        // Stop
+        function stop() {
+            log('⏹️ Arrêt de la connexion');
+            
+            if (state.intervalId) {
+                clearInterval(state.intervalId);
+                state.intervalId = null;
+            }
+            
+            if (state.eventSource) {
+                state.eventSource.close();
+                state.eventSource = null;
+            }
+            
+            state.mode = null;
+            updateStatus();
+        }
+        
+        // Reset
+        function reset() {
+            state.requestCount = 0;
+            state.totalHeadersSize = 0;
+            state.startTime = null;
+            elements.counter.textContent = '--';
+            elements.lastUpdate.textContent = 'En attente...';
+            updateMetrics();
+        }
+        
+        // Mise à jour UI
+        function updateStatus() {
+            elements.btnPolling.disabled = state.mode !== null;
+            elements.btnSSE.disabled = state.mode !== null;
+            elements.btnStop.disabled = state.mode === null;
+            
+            if (state.mode === 'polling') {
+                elements.status.className = 'status polling';
+                elements.status.textContent = '🔄 Mode Polling actif';
+            } else if (state.mode === 'sse') {
+                elements.status.className = 'status sse';
+                elements.status.textContent = '⚡ Mode SSE actif';
+            } else {
+                elements.status.className = 'status inactive';
+                elements.status.textContent = '⚪ Inactif';
+            }
+        }
+        
+        // Event listeners
+        elements.btnPolling.addEventListener('click', () => {
+            reset();
+            startPolling();
+        });
+        
+        elements.btnSSE.addEventListener('click', () => {
+            reset();
+            startSSE();
+        });
+        
+        elements.btnStop.addEventListener('click', () => {
+            stop();
+        });
+        
+        // Initialisation
+        log('🚀 Application prête. Serveur attendu sur http://localhost:8081');
+        log('📋 Utilisez les boutons ci-dessus pour tester Polling ou SSE');
+    </script>
+</body>
+</html>
